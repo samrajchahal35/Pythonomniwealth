@@ -7,13 +7,14 @@ import streamlit.components.v1 as components
 import matplotlib.pyplot as plt
 
 # ==========================================
-# 🔑 CREDENTIALS & CONFIGURATION
+# 🔑 CREDENTIALS
 # ==========================================
 T212_API_KEY_ID = "44325952ZqvqzThpqXFkTOTzpZNXItUEtoCRx"
 T212_SECRET_KEY = "IK_uSnsJpyQ1JiK2M4BSfuzejEq1Pu3xRItCXFkzqc4"
 
 PLAID_CLIENT_ID = "6ac26ec74b48b1000df508bd"
 PLAID_SECRET = "a9a14167cb418c333b0a0a5ca3102b"
+PLAID_ENV = "development"  # 'sandbox' or 'development'
 
 DB_FILE = "omniwealth.db"
 
@@ -45,26 +46,22 @@ def init_db():
 init_db()
 
 # ==========================================
-# 📡 TRADING 212 API (FIXED 401 AUTH)
+# 📡 TRADING 212 API (FIXED BASIC AUTH)
 # ==========================================
 def fetch_trading212_balance():
-    if not T212_API_KEY_ID:
-        return 0.0, "API credentials missing"
+    if not T212_API_KEY_ID or not T212_SECRET_KEY:
+        return 0.0, "Credentials missing"
     
     url = "https://live.trading212.com/api/v0/equity/account/summary"
     
     try:
-        # Try Bearer token header first
-        headers = {"Authorization": T212_API_KEY_ID.strip()}
-        res = requests.get(url, headers=headers, timeout=8)
-        
-        # If 401, try Basic Authentication with Secret Key
-        if res.status_code == 401 and T212_SECRET_KEY:
-            res = requests.get(
-                url, 
-                auth=(T212_API_KEY_ID.strip(), T212_SECRET_KEY.strip()), 
-                timeout=8
-            )
+        # HTTP Basic Authentication using (API_KEY_ID, SECRET_KEY) tuple
+        res = requests.get(
+            url, 
+            auth=(T212_API_KEY_ID.strip(), T212_SECRET_KEY.strip()),
+            headers={"Content-Type": "application/json"},
+            timeout=8
+        )
 
         if res.status_code == 200:
             total = float(res.json().get("total", 0.0))
@@ -73,6 +70,29 @@ def fetch_trading212_balance():
             return 0.0, f"HTTP {res.status_code}"
     except Exception as e:
         return 0.0, f"Error: {str(e)}"
+
+# ==========================================
+# 🏦 PLAID LINK TOKEN GENERATOR
+# ==========================================
+def generate_plaid_link_token():
+    url = f"https://{PLAID_ENV}.plaid.com/link/token/create"
+    payload = {
+        "client_id": PLAID_CLIENT_ID,
+        "secret": PLAID_SECRET,
+        "client_name": "OmniWealth Tracker",
+        "user": {"client_user_id": "user_samraj"},
+        "products": ["transactions", "auth"],
+        "country_codes": ["GB"],
+        "language": "en"
+    }
+    try:
+        res = requests.post(url, json=payload, timeout=8)
+        if res.status_code == 200:
+            return res.json().get("link_token")
+        else:
+            return None
+    except Exception:
+        return None
 
 # ==========================================
 # 🛠️ DATABASE HELPERS
@@ -132,7 +152,7 @@ total_assets = t212_val + plaid_val + manual_assets
 total_liabilities = manual_liabilities
 net_worth = total_assets - total_liabilities
 
-# METRICS DISPLAY
+# METRICS
 col1, col2, col3 = st.columns(3)
 col1.metric("Net Worth", f"£{net_worth:,.2f}")
 col2.metric("Total Assets", f"£{total_assets:,.2f}")
@@ -171,7 +191,7 @@ with tab_overview:
             st.info("No active assets to display.")
 
     with c2:
-        st.subheader("Live API Connections")
+        st.subheader("Live Connections")
         if t212_msg == "Connected":
             st.success(f"Trading 212: £{t212_val:,.2f} ({t212_msg})")
         else:
@@ -213,26 +233,38 @@ with tab_manage:
 
 with tab_plaid:
     st.subheader("Connect UK Bank Account via Open Banking")
-    st.write("Link retail UK bank accounts (Monzo, Revolut, HSBC, Lloyds, Santander, Starling, etc.).")
+    
+    link_token = generate_plaid_link_token()
 
-    # Embed Plaid Link Connector HTML/JS
-    plaid_html = f"""
-    <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
-    <div style="padding: 10px 0;">
-        <button id="link-btn" style="background-color: #10B981; color: #0F172A; font-weight: bold; padding: 12px 24px; border: none; border-radius: 8px; cursor: pointer; font-size: 16px;">
-            🔗 Launch Open Banking Link
-        </button>
-    </div>
-    <script>
-        document.getElementById('link-btn').onclick = function() {{
-            alert("Plaid Open Banking Link Initialized! Environment: Development\\nClient ID: {PLAID_CLIENT_ID}");
-        }};
-    </script>
-    """
-    components.html(plaid_html, height=100)
+    if link_token:
+        plaid_html = f"""
+        <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
+        <div style="padding: 10px 0;">
+            <button id="link-btn" style="background-color: #10B981; color: #0F172A; font-weight: bold; padding: 12px 24px; border: none; border-radius: 8px; cursor: pointer; font-size: 16px;">
+                🔗 Launch Open Banking Link
+            </button>
+        </div>
+        <script>
+            const handler = Plaid.create({{
+                token: '{link_token}',
+                onSuccess: (public_token, metadata) => {{
+                    alert('Successfully connected ' + metadata.institution.name + '!');
+                }},
+                onExit: (err, metadata) => {{
+                    if (err) console.error(err);
+                }}
+            }});
+            document.getElementById('link-btn').onclick = function() {{
+                handler.open();
+            }};
+        </script>
+        """
+        components.html(plaid_html, height=100)
+    else:
+        st.warning("Could not initialize Plaid session. Ensure environment is set to 'development' on Plaid Dashboard.")
 
     st.markdown("---")
-    st.write("**Manual Override / Quick Bank Entry (£)**")
+    st.write("**Manual Bank Entry (£)**")
     override_val = st.number_input("Enter Total Open Banking Balance", min_value=0.0, value=plaid_val, step=50.0)
     if st.button("Save Open Banking Balance"):
         set_plaid_balance(override_val)
