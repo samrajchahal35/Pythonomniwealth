@@ -10,7 +10,7 @@ T212_API_KEY_ID = "44325952ZqvqzThpqXFkTOTzpZNXItUEtoCRx"
 T212_SECRET_KEY = "IK_uSnsJpyQ1JiK2M4BSfuzejEq1Pu3xRItCXFkzqc4"
 
 # ==========================================
-# 🧠 SESSION STATE
+# 🧠 SESSION STATE MANAGEMENT
 # ==========================================
 if "bank_balance" not in st.session_state:
   st.session_state.bank_balance = 0.0
@@ -20,52 +20,49 @@ if "manual_accounts" not in st.session_state:
 
 
 # ==========================================
-# 📡 TRADING 212 API CONNECTOR
+# 📡 TRADING 212 DIAGNOSTIC CONNECTOR
 # ==========================================
 def fetch_trading212_balance():
-  if not T212_API_KEY_ID or not T212_SECRET_KEY:
-    return 0.0, "Missing Credentials"
+  if not T212_API_KEY_ID:
+    return 0.0, "Missing Key"
 
-  # Base64 Auth
-  creds = f"{T212_API_KEY_ID.strip()}:{T212_SECRET_KEY.strip()}"
-  encoded_creds = base64.b64encode(creds.encode("utf-8")).decode("utf-8")
+  url = "https://live.trading212.com/api/v0/equity/account/summary"
 
-  # 1. Try V1 API Path (Basic Auth)
+  # Attempt 1: Raw API Key ID Header (Standard T212 API Header)
   try:
     headers = {
-        "Authorization": f"Basic {encoded_creds}",
+        "Authorization": T212_API_KEY_ID.strip(),
         "User-Agent": "OmniWealth/1.0",
-        "Content-Type": "application/json",
     }
-    res = requests.get(
-        "https://live.trading212.com/api/v1/equity/account/summary",
-        headers=headers,
-        timeout=6,
-    )
+    res = requests.get(url, headers=headers, timeout=6)
     if res.status_code == 200:
       data = res.json()
-      return float(data.get("total", data.get("free", 0.0))), "Connected (V1)"
+      val = data.get("totalValue", data.get("total", 0.0))
+      return float(val), "Connected (Raw Key)"
   except Exception:
     pass
 
-  # 2. Try V0 Path (Direct Key)
-  try:
-    headers = {
-        "Authorization": T212_SECRET_KEY.strip(),
-        "User-Agent": "OmniWealth/1.0",
-    }
-    res = requests.get(
-        "https://live.trading212.com/api/v0/equity/account/summary",
-        headers=headers,
-        timeout=6,
-    )
-    if res.status_code == 200:
-      data = res.json()
-      return float(data.get("total", 0.0)), "Connected (V0)"
-  except Exception:
-    pass
+  # Attempt 2: Basic Auth (API_KEY_ID:SECRET_KEY)
+  if T212_SECRET_KEY:
+    try:
+      creds = f"{T212_API_KEY_ID.strip()}:{T212_SECRET_KEY.strip()}"
+      encoded = base64.b64encode(creds.encode("utf-8")).decode("utf-8")
+      headers = {
+          "Authorization": f"Basic {encoded}",
+          "User-Agent": "OmniWealth/1.0",
+      }
+      res = requests.get(url, headers=headers, timeout=6)
+      if res.status_code == 200:
+        data = res.json()
+        val = data.get("totalValue", data.get("total", 0.0))
+        return float(val), "Connected (Basic Auth)"
+    except Exception:
+      pass
 
-  return 0.0, "HTTP 401: Authorization Failed"
+  return (
+      0.0,
+      "HTTP 401: Key missing 'Account Data' permissions in Trading 212 app",
+  )
 
 
 # ==========================================
@@ -112,11 +109,17 @@ with tab_overview:
   c1, c2 = st.columns([1, 1])
 
   with c1:
-    st.subheader("Live Status")
+    st.subheader("Live Connections Status")
     if "Connected" in t212_msg:
       st.success(f"Trading 212 Balance: £{t212_val:,.2f} ({t212_msg})")
     else:
       st.error(f"Trading 212: £0.00 ({t212_msg})")
+      st.warning(
+          "⚠️ **Fixing 401 in Trading 212 App:**\n1. Open Trading 212 → Settings"
+          " → API.\n2. Delete existing key and tap 'Generate New Key'.\n3."
+          " Make sure **ALL permission toggles** (especially Account Data) are"
+          " switched **ON**.\n4. Update the key in GitHub."
+      )
 
     st.info(f"Bank Balance: £{bank_val:,.2f}")
 
