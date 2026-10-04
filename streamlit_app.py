@@ -6,10 +6,10 @@ import streamlit as st
 # ==========================================
 # 🔑 CREDENTIALS
 # ==========================================
-API_KEY_ID = "44325952ZfcWFQoiSdmGrgpQewEDYHvqwdSvt"
+API_KEY = "44325952ZfcWFQoiSdmGrgpQewEDYHvqwdSvt"
 API_SECRET = "JOLbvgAdJqf-sfifvrly4dlAiGruqijFDff844nFYbU"
 
-# Set to True ONLY if generated in Practice / Demo mode
+# Set to True ONLY if keys were generated in Practice / Demo mode
 IS_DEMO = False
 
 # ==========================================
@@ -23,49 +23,36 @@ if "manual_accounts" not in st.session_state:
 
 
 # ==========================================
-# 📡 DUAL-AUTH TRADING 212 CONNECTOR
+# 📡 OFFICIAL TRADING 212 API CONNECTOR
 # ==========================================
 def fetch_trading212_balance():
-    clean_id = API_KEY_ID.strip().replace("\n", "").replace("\r", "")
+    clean_key = API_KEY.strip().replace("\n", "").replace("\r", "")
     clean_secret = API_SECRET.strip().replace("\n", "").replace("\r", "")
 
-    if not clean_id or not clean_secret:
-        return 0.0, "Missing Keys"
+    if not clean_key or not clean_secret:
+        return 0.0, "Missing API Credentials"
 
     domain = "demo.trading212.com" if IS_DEMO else "live.trading212.com"
     url = f"https://{domain}/api/v0/equity/account/summary"
 
-    # Common headers to bypass Cloudflare bot filtering
-    base_headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    # Standard Trading 212 Basic Auth Header: Base64(API_KEY:API_SECRET)
+    raw_creds = f"{clean_key}:{clean_secret}"
+    encoded_creds = base64.b64encode(raw_creds.encode("utf-8")).decode("utf-8")
+
+    headers = {
+        "Authorization": f"Basic {encoded_creds}",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
         "Accept": "application/json",
-        "Accept-Language": "en-US,en;q=0.9",
     }
 
-    # Attempt 1: Standard Direct Secret Key Authorization
     try:
-        headers_direct = base_headers.copy()
-        headers_direct["Authorization"] = clean_secret
-        res = requests.get(url, headers=headers_direct, timeout=8)
+        res = requests.get(url, headers=headers, timeout=8)
         if res.status_code == 200:
             data = res.json()
             val = data.get("totalValue", data.get("total", 0.0))
-            return float(val), "Connected (Direct Key)"
-    except Exception:
-        pass
-
-    # Attempt 2: Basic Auth Base64(API_KEY_ID:API_SECRET)
-    try:
-        raw_creds = f"{clean_id}:{clean_secret}"
-        encoded_creds = base64.b64encode(raw_creds.encode("utf-8")).decode("utf-8")
-        headers_basic = base_headers.copy()
-        headers_basic["Authorization"] = f"Basic {encoded_creds}"
-
-        res = requests.get(url, headers=headers_basic, timeout=8)
-        if res.status_code == 200:
-            data = res.json()
-            val = data.get("totalValue", data.get("total", 0.0))
-            return float(val), "Connected (Basic Auth)"
+            return float(val), "Connected"
+        elif res.status_code == 401:
+            return 0.0, "HTTP 401: Invalid Credentials or Permissions"
         else:
             return 0.0, f"HTTP {res.status_code}"
     except Exception as e:
@@ -115,7 +102,7 @@ with tab_overview:
 
     with c1:
         st.subheader("Live Connections Status")
-        if "Connected" in t212_msg:
+        if t212_msg == "Connected":
             st.success(f"Trading 212 Balance: £{t212_val:,.2f} ({t212_msg})")
         else:
             st.error(f"Trading 212: £0.00 ({t212_msg})")
