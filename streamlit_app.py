@@ -1,3 +1,4 @@
+import base64
 import datetime
 import sqlite3
 import matplotlib.pyplot as plt
@@ -8,177 +9,80 @@ import streamlit as st
 # ==========================================
 # 🔑 CREDENTIALS
 # ==========================================
-# Trading 212 Real Account Credentials
 T212_API_KEY_ID = "44325952ZqvqzThpqXFkTOTzpZNXItUEtoCRx"
 T212_SECRET_KEY = "IK_uSnsJpyQ1JiK2M4BSfuzejEq1Pu3xRItCXFkzqc4"
 
-# GoCardless Open Banking Credentials (Free at bankaccountdata.gocardless.com)
-GOCARDLESS_SECRET_ID = "YOUR_GOCARDLESS_SECRET_ID"
-GOCARDLESS_SECRET_KEY = "YOUR_GOCARDLESS_SECRET_KEY"
+# Set to True ONLY if keys were generated inside Practice/Demo mode
+USE_DEMO_ACCOUNT = False
 
-DB_FILE = "omniwealth.db"
+# ==========================================
+# 🧠 SESSION STATE MANAGEMENT
+# ==========================================
+if "open_banking_balance" not in st.session_state:
+  st.session_state.open_banking_balance = 0.0
+
+if "manual_accounts" not in st.session_state:
+  st.session_state.manual_accounts = [
+      {
+          "id": 1,
+          "name": "Dodl LISA",
+          "category": "ISA / LISA",
+          "type": "Asset",
+          "balance": 5000.00,
+          "last_updated": "2026-10-01",
+      },
+      {
+          "id": 2,
+          "name": "Workplace Pension",
+          "category": "Pension",
+          "type": "Asset",
+          "balance": 8400.00,
+          "last_updated": "2026-09-15",
+      },
+      {
+          "id": 3,
+          "name": "Student Loan",
+          "category": "Loan / Debt",
+          "type": "Liability",
+          "balance": 14500.00,
+          "last_updated": "2026-08-20",
+      },
+  ]
 
 
 # ==========================================
-# 🗄️ DATABASE SETUP
-# ==========================================
-def init_db():
-  conn = sqlite3.connect(DB_FILE)
-  c = conn.cursor()
-  c.execute("""
-        CREATE TABLE IF NOT EXISTS manual_accounts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            category TEXT NOT NULL,
-            type TEXT NOT NULL,
-            balance REAL NOT NULL,
-            last_updated TEXT NOT NULL
-        )
-    """)
-  c.execute("""
-        CREATE TABLE IF NOT EXISTS api_balances (
-            key_name TEXT PRIMARY KEY,
-            balance REAL NOT NULL
-        )
-    """)
-  conn.commit()
-  conn.close()
-
-
-init_db()
-
-
-# ==========================================
-# 📡 TRADING 212 API (FIXED 401 BASIC AUTH)
+# 📡 TRADING 212 API (STRICT BASIC AUTH)
 # ==========================================
 def fetch_trading212_balance():
   if not T212_API_KEY_ID or not T212_SECRET_KEY:
-    return 0.0, "Missing API Key or Secret"
+    return 0.0, "Missing Credentials"
 
-  url = "https://live.trading212.com/api/v0/equity/account/summary"
+  domain = "demo.trading212.com" if USE_DEMO_ACCOUNT else "live.trading212.com"
+  url = f"https://{domain}/api/v0/equity/account/summary"
+
+  # Format: "Basic " + base64("KEY_ID:SECRET_KEY")
+  raw_creds = f"{T212_API_KEY_ID.strip()}:{T212_SECRET_KEY.strip()}"
+  encoded_creds = base64.b64encode(raw_creds.encode("utf-8")).decode("utf-8")
+
+  headers = {
+      "Authorization": f"Basic {encoded_creds}",
+      "Content-Type": "application/json",
+  }
 
   try:
-    # Basic Auth tuple automatically handles base64 encoding (API_KEY_ID:SECRET_KEY)
-    res = requests.get(
-        url,
-        auth=(T212_API_KEY_ID.strip(), T212_SECRET_KEY.strip()),
-        headers={"Content-Type": "application/json"},
-        timeout=8,
-    )
-
+    res = requests.get(url, headers=headers, timeout=8)
     if res.status_code == 200:
       total = float(res.json().get("total", 0.0))
       return total, "Connected"
     elif res.status_code == 401:
-      return 0.0, "HTTP 401 (Invalid Key ID / Secret pair)"
+      return (
+          0.0,
+          "HTTP 401: Invalid Key Pair or wrong environment (Live vs Demo)",
+      )
     else:
       return 0.0, f"HTTP {res.status_code}"
   except Exception as e:
     return 0.0, f"Error: {str(e)}"
-
-
-# ==========================================
-# 🏦 GOCARDLESS UK OPEN BANKING CONNECT
-# ==========================================
-def get_gocardless_token():
-  if (
-      not GOCARDLESS_SECRET_ID
-      or GOCARDLESS_SECRET_ID == "YOUR_GOCARDLESS_SECRET_ID"
-  ):
-    return None
-
-  url = "https://bankaccountdata.gocardless.com/api/v2/secret/new/"
-  payload = {
-      "secret_id": GOCARDLESS_SECRET_ID.strip(),
-      "secret_key": GOCARDLESS_SECRET_KEY.strip(),
-  }
-  try:
-    res = requests.post(url, json=payload, timeout=8)
-    if res.status_code == 200:
-      return res.json().get("access")
-    return None
-  except Exception:
-    return None
-
-
-def create_bank_redirect_link(institution_id):
-  token = get_gocardless_token()
-  if not token:
-    return (
-        None,
-        "GoCardless Secret ID/Key missing. Enter keys from"
-        " bankaccountdata.gocardless.com",
-    )
-
-  headers = {"Authorization": f"Bearer {token}"}
-  url = "https://bankaccountdata.gocardless.com/api/v2/requisitions/"
-  payload = {
-      "redirect": "https://omniwealth.streamlit.app",
-      "institution_id": institution_id,
-      "reference": "omniwealth_user",
-      "user_language": "EN",
-  }
-  try:
-    res = requests.post(url, json=payload, headers=headers, timeout=8)
-    if res.status_code == 201:
-      return res.json().get("link"), "OK"
-    return None, f"HTTP {res.status_code}: {res.text}"
-  except Exception as e:
-    return None, str(e)
-
-
-# ==========================================
-# 🛠️ DATABASE HELPERS
-# ==========================================
-def get_manual_accounts():
-  conn = sqlite3.connect(DB_FILE)
-  df = pd.read_sql_query("SELECT * FROM manual_accounts", conn)
-  conn.close()
-  return df
-
-
-def save_manual_account(name, category, acc_type, balance):
-  now = datetime.date.today().strftime("%Y-%m-%d")
-  conn = sqlite3.connect(DB_FILE)
-  c = conn.cursor()
-  c.execute(
-      "INSERT INTO manual_accounts (name, category, type, balance, last_updated)"
-      " VALUES (?, ?, ?, ?, ?)",
-      (name, category, acc_type, balance, now),
-  )
-  conn.commit()
-  conn.close()
-
-
-def delete_manual_account(acc_id):
-  conn = sqlite3.connect(DB_FILE)
-  c = conn.cursor()
-  c.execute("DELETE FROM manual_accounts WHERE id=?", (acc_id,))
-  conn.commit()
-  conn.close()
-
-
-def get_bank_balance():
-  conn = sqlite3.connect(DB_FILE)
-  c = conn.cursor()
-  c.execute(
-      "SELECT balance FROM api_balances WHERE key_name='open_banking'"
-  )
-  row = c.fetchone()
-  conn.close()
-  return row[0] if row else 0.0
-
-
-def set_bank_balance(bal):
-  conn = sqlite3.connect(DB_FILE)
-  c = conn.cursor()
-  c.execute(
-      "INSERT OR REPLACE INTO api_balances (key_name, balance) VALUES"
-      " ('open_banking', ?)",
-      (bal,),
-  )
-  conn.commit()
-  conn.close()
 
 
 # ==========================================
@@ -191,9 +95,9 @@ st.set_page_config(
 st.title("💰 OmniWealth Net Worth Tracker")
 
 t212_val, t212_msg = fetch_trading212_balance()
-bank_val = get_bank_balance()
+bank_val = st.session_state.open_banking_balance
 
-manual_df = get_manual_accounts()
+manual_df = pd.DataFrame(st.session_state.manual_accounts)
 manual_assets = (
     manual_df[manual_df["type"] == "Asset"]["balance"].sum()
     if not manual_df.empty
@@ -218,7 +122,7 @@ col3.metric("Total Liabilities", f"-£{total_liabilities:,.2f}")
 st.markdown("---")
 
 tab_overview, tab_manage, tab_banking = st.tabs(
-    ["📊 Overview", "✏️ Manage Manual Accounts", "🏦 Connect UK Banks"]
+    ["📊 Overview", "✏️ Manage Accounts", "🏦 Open Banking"]
 )
 
 with tab_overview:
@@ -256,9 +160,9 @@ with tab_overview:
       st.info("No active assets to display.")
 
   with c2:
-    st.subheader("Live API Status")
+    st.subheader("Live Connections")
     if t212_msg == "Connected":
-      st.success(f"Trading 212 Balance: £{t212_val:,.2f} ({t212_msg})")
+      st.success(f"Trading 212: £{t212_val:,.2f} ({t212_msg})")
     else:
       st.error(f"Trading 212: £0.00 ({t212_msg})")
 
@@ -268,7 +172,7 @@ with tab_overview:
       st.rerun()
 
 with tab_manage:
-  st.subheader("Add Manual Account")
+  st.subheader("Add Account")
   m_col1, m_col2 = st.columns([1, 2])
 
   with m_col1:
@@ -290,7 +194,16 @@ with tab_manage:
       acc_bal = st.number_input("Balance (£)", min_value=0.0, step=100.0)
 
       if st.form_submit_button("Save Account") and acc_name:
-        save_manual_account(acc_name, acc_cat, acc_type, acc_bal)
+        new_id = len(st.session_state.manual_accounts) + 1
+        now = datetime.date.today().strftime("%Y-%m-%d")
+        st.session_state.manual_accounts.append({
+            "id": new_id,
+            "name": acc_name,
+            "category": acc_cat,
+            "type": acc_type,
+            "balance": acc_bal,
+            "last_updated": now,
+        })
         st.success(f"Saved {acc_name}")
         st.rerun()
 
@@ -308,43 +221,21 @@ with tab_manage:
           "Select Account ID to Delete", manual_df["id"].tolist()
       )
       if st.button("🗑️ Delete Selected Account"):
-        delete_manual_account(del_id)
+        st.session_state.manual_accounts = [
+            a for a in st.session_state.manual_accounts if a["id"] != del_id
+        ]
         st.warning(f"Deleted Account ID {del_id}")
         st.rerun()
-    else:
-      st.info("No manual accounts stored.")
 
 with tab_banking:
-  st.subheader("Connect Real UK Bank Account")
-
-  bank_choice = st.selectbox(
-      "Select Your Bank",
-      [
-          ("Monzo", "MONZO_MONZGB21"),
-          ("Revolut", "REVOLUT_REVO21"),
-          ("HSBC UK", "HSBC_HBUKGB22"),
-          ("Barclays UK", "BARCLAYS_BARCGB22"),
-          ("Lloyds Bank", "LLOYDS_LOYDGB21"),
-          ("Santander UK", "SANTANDER_ABBYGB21"),
-          ("Starling Bank", "STARLING_SRLGGB21"),
-      ],
-      format_func=lambda x: x[0],
+  st.subheader("Open Banking Balance")
+  new_bal = st.number_input(
+      "Enter Total UK Bank Balance (£)",
+      min_value=0.0,
+      value=st.session_state.open_banking_balance,
+      step=50.0,
   )
-
-  if st.button("🔗 Launch Bank Authentication Page"):
-    link_url, status = create_bank_redirect_link(bank_choice[1])
-    if link_url:
-      st.success("Click below to log in securely through your bank:")
-      st.link_button("Open Bank Login Page", link_url)
-    else:
-      st.warning(f"Connection Status: {status}")
-
-  st.markdown("---")
-  st.write("**Manual Bank Balance Override (£)**")
-  override_val = st.number_input(
-      "Enter Total Bank Balance", min_value=0.0, value=bank_val, step=50.0
-  )
-  if st.button("Save Bank Balance"):
-    set_bank_balance(override_val)
-    st.success(f"Updated Open Banking Balance to £{override_val:,.2f}")
+  if st.button("Save Open Banking Balance"):
+    st.session_state.open_banking_balance = new_bal
+    st.success(f"Updated Open Banking Balance to £{new_bal:,.2f}")
     st.rerun()
