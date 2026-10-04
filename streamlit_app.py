@@ -1,4 +1,3 @@
-import base64
 import datetime
 import sqlite3
 import matplotlib.pyplot as plt
@@ -7,14 +6,15 @@ import requests
 import streamlit as st
 
 # ==========================================
-# 🔑 YOUR CREDENTIALS
+# 🔑 CREDENTIALS
 # ==========================================
+# Trading 212 Real Account Credentials
 T212_API_KEY_ID = "44325952ZqvqzThpqXFkTOTzpZNXItUEtoCRx"
 T212_SECRET_KEY = "IK_uSnsJpyQ1JiK2M4BSfuzejEq1Pu3xRItCXFkzqc4"
 
-# Optional: Add GoCardless Secret ID & Key from bankaccountdata.gocardless.com
-GOCARDLESS_SECRET_ID = ""
-GOCARDLESS_SECRET_KEY = ""
+# GoCardless Open Banking Credentials (Free at bankaccountdata.gocardless.com)
+GOCARDLESS_SECRET_ID = "YOUR_GOCARDLESS_SECRET_ID"
+GOCARDLESS_SECRET_KEY = "YOUR_GOCARDLESS_SECRET_KEY"
 
 DB_FILE = "omniwealth.db"
 
@@ -49,7 +49,7 @@ init_db()
 
 
 # ==========================================
-# 📡 TRADING 212 API (PROPER BASIC AUTH)
+# 📡 TRADING 212 API (FIXED 401 BASIC AUTH)
 # ==========================================
 def fetch_trading212_balance():
   if not T212_API_KEY_ID or not T212_SECRET_KEY:
@@ -57,26 +57,74 @@ def fetch_trading212_balance():
 
   url = "https://live.trading212.com/api/v0/equity/account/summary"
 
-  # Base64 Encode API_KEY_ID:SECRET_KEY
-  credentials = f"{T212_API_KEY_ID.strip()}:{T212_SECRET_KEY.strip()}"
-  encoded_credentials = base64.b64encode(credentials.encode("utf-8")).decode(
-      "utf-8"
-  )
-
-  headers = {
-      "Authorization": f"Basic {encoded_credentials}",
-      "Content-Type": "application/json",
-  }
-
   try:
-    res = requests.get(url, headers=headers, timeout=8)
+    # Basic Auth tuple automatically handles base64 encoding (API_KEY_ID:SECRET_KEY)
+    res = requests.get(
+        url,
+        auth=(T212_API_KEY_ID.strip(), T212_SECRET_KEY.strip()),
+        headers={"Content-Type": "application/json"},
+        timeout=8,
+    )
+
     if res.status_code == 200:
       total = float(res.json().get("total", 0.0))
       return total, "Connected"
+    elif res.status_code == 401:
+      return 0.0, "HTTP 401 (Invalid Key ID / Secret pair)"
     else:
       return 0.0, f"HTTP {res.status_code}"
   except Exception as e:
     return 0.0, f"Error: {str(e)}"
+
+
+# ==========================================
+# 🏦 GOCARDLESS UK OPEN BANKING CONNECT
+# ==========================================
+def get_gocardless_token():
+  if (
+      not GOCARDLESS_SECRET_ID
+      or GOCARDLESS_SECRET_ID == "YOUR_GOCARDLESS_SECRET_ID"
+  ):
+    return None
+
+  url = "https://bankaccountdata.gocardless.com/api/v2/secret/new/"
+  payload = {
+      "secret_id": GOCARDLESS_SECRET_ID.strip(),
+      "secret_key": GOCARDLESS_SECRET_KEY.strip(),
+  }
+  try:
+    res = requests.post(url, json=payload, timeout=8)
+    if res.status_code == 200:
+      return res.json().get("access")
+    return None
+  except Exception:
+    return None
+
+
+def create_bank_redirect_link(institution_id):
+  token = get_gocardless_token()
+  if not token:
+    return (
+        None,
+        "GoCardless Secret ID/Key missing. Enter keys from"
+        " bankaccountdata.gocardless.com",
+    )
+
+  headers = {"Authorization": f"Bearer {token}"}
+  url = "https://bankaccountdata.gocardless.com/api/v2/requisitions/"
+  payload = {
+      "redirect": "https://omniwealth.streamlit.app",
+      "institution_id": institution_id,
+      "reference": "omniwealth_user",
+      "user_language": "EN",
+  }
+  try:
+    res = requests.post(url, json=payload, headers=headers, timeout=8)
+    if res.status_code == 201:
+      return res.json().get("link"), "OK"
+    return None, f"HTTP {res.status_code}: {res.text}"
+  except Exception as e:
+    return None, str(e)
 
 
 # ==========================================
@@ -134,7 +182,7 @@ def set_bank_balance(bal):
 
 
 # ==========================================
-# 🎨 DASHBOARD UI
+# 🎨 STREAMLIT DASHBOARD
 # ==========================================
 st.set_page_config(
     page_title="OmniWealth Tracker", page_icon="💰", layout="wide"
@@ -161,7 +209,7 @@ total_assets = t212_val + bank_val + manual_assets
 total_liabilities = manual_liabilities
 net_worth = total_assets - total_liabilities
 
-# TOP METRICS
+# METRICS
 col1, col2, col3 = st.columns(3)
 col1.metric("Net Worth", f"£{net_worth:,.2f}")
 col2.metric("Total Assets", f"£{total_assets:,.2f}")
@@ -170,7 +218,7 @@ col3.metric("Total Liabilities", f"-£{total_liabilities:,.2f}")
 st.markdown("---")
 
 tab_overview, tab_manage, tab_banking = st.tabs(
-    ["📊 Overview", "✏️ Manage Manual Accounts", "🏦 Open Banking"]
+    ["📊 Overview", "✏️ Manage Manual Accounts", "🏦 Connect UK Banks"]
 )
 
 with tab_overview:
@@ -208,7 +256,7 @@ with tab_overview:
       st.info("No active assets to display.")
 
   with c2:
-    st.subheader("Live Connections")
+    st.subheader("Live API Status")
     if t212_msg == "Connected":
       st.success(f"Trading 212 Balance: £{t212_val:,.2f} ({t212_msg})")
     else:
@@ -267,11 +315,36 @@ with tab_manage:
       st.info("No manual accounts stored.")
 
 with tab_banking:
-  st.subheader("Open Banking Balance")
-  override_val = st.number_input(
-      "Enter Total Bank Balance (£)", min_value=0.0, value=bank_val, step=50.0
+  st.subheader("Connect Real UK Bank Account")
+
+  bank_choice = st.selectbox(
+      "Select Your Bank",
+      [
+          ("Monzo", "MONZO_MONZGB21"),
+          ("Revolut", "REVOLUT_REVO21"),
+          ("HSBC UK", "HSBC_HBUKGB22"),
+          ("Barclays UK", "BARCLAYS_BARCGB22"),
+          ("Lloyds Bank", "LLOYDS_LOYDGB21"),
+          ("Santander UK", "SANTANDER_ABBYGB21"),
+          ("Starling Bank", "STARLING_SRLGGB21"),
+      ],
+      format_func=lambda x: x[0],
   )
-  if st.button("Save Open Banking Balance"):
+
+  if st.button("🔗 Launch Bank Authentication Page"):
+    link_url, status = create_bank_redirect_link(bank_choice[1])
+    if link_url:
+      st.success("Click below to log in securely through your bank:")
+      st.link_button("Open Bank Login Page", link_url)
+    else:
+      st.warning(f"Connection Status: {status}")
+
+  st.markdown("---")
+  st.write("**Manual Bank Balance Override (£)**")
+  override_val = st.number_input(
+      "Enter Total Bank Balance", min_value=0.0, value=bank_val, step=50.0
+  )
+  if st.button("Save Bank Balance"):
     set_bank_balance(override_val)
     st.success(f"Updated Open Banking Balance to £{override_val:,.2f}")
     st.rerun()
