@@ -1,20 +1,15 @@
-import base64
 import pandas as pd
 import requests
 import streamlit as st
 
 # ==========================================
-# 🔑 UPDATED CREDENTIALS (STRIPPED)
+# 🔑 CREDENTIALS
 # ==========================================
-RAW_KEY_ID = "44325952ZfcWFQoiSdmGrgpQewEDYHvqwdSvt"
-RAW_SECRET = "JOLbvgAdJqf-sfifvrly4dlAiGruqijFDff844nFYbU"
-
-# Remove any accidental trailing spaces, newlines, or tabs
-T212_API_KEY_ID = RAW_KEY_ID.strip().replace("\n", "").replace("\r", "")
-T212_SECRET_KEY = RAW_SECRET.strip().replace("\n", "").replace("\r", "")
+T212_API_KEY_ID = "44325952ZfcWFQoiSdmGrgpQewEDYHvqwdSvt"
+T212_SECRET_KEY = "JOLbvgAdJqf-sfifvrly4dlAiGruqijFDff844nFYbU"
 
 # ==========================================
-# 🧠 SESSION STATE MANAGEMENT
+# 🧠 SESSION STATE
 # ==========================================
 if "bank_balance" not in st.session_state:
   st.session_state.bank_balance = 0.0
@@ -24,25 +19,25 @@ if "manual_accounts" not in st.session_state:
 
 
 # ==========================================
-# 📡 OFFICIAL TRADING 212 API CONNECTOR
+# 📡 TRADING 212 API CONNECTOR
 # ==========================================
 def fetch_trading212_balance():
   url = "https://live.trading212.com/api/v0/equity/account/summary"
 
-  # Build Official Basic Auth String: Base64("KEY_ID:SECRET")
-  credentials_string = f"{T212_API_KEY_ID}:{T212_SECRET_KEY}"
-  encoded_credentials = base64.b64encode(
-      credentials_string.encode("utf-8")
-  ).decode("utf-8")
-
   headers = {
-      "Authorization": f"Basic {encoded_credentials}",
-      "User-Agent": "OmniWealth/1.0",
-      "Content-Type": "application/json",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+      "Accept": "application/json",
   }
 
   try:
-    res = requests.get(url, headers=headers, timeout=8)
+    # Official HTTP Basic Auth: username=API_KEY_ID, password=SECRET_KEY
+    res = requests.get(
+        url,
+        auth=(T212_API_KEY_ID.strip(), T212_SECRET_KEY.strip()),
+        headers=headers,
+        timeout=8,
+    )
+
     if res.status_code == 200:
       data = res.json()
       val = data.get("totalValue", data.get("total", 0.0))
