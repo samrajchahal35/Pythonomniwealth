@@ -1,12 +1,17 @@
+import base64
 import pandas as pd
 import requests
 import streamlit as st
 
 # ==========================================
-# 🔑 UPDATED CREDENTIALS
+# 🔑 UPDATED CREDENTIALS (STRIPPED)
 # ==========================================
-T212_SECRET_KEY = "JOLbvgAdJqf-sfifvrly4dlAiGruqijFDff844nFYbU"
-T212_API_KEY_ID = "44325952ZfcWFQoiSdmGrgpQewEDYHvqwdSvt"
+RAW_KEY_ID = "44325952ZfcWFQoiSdmGrgpQewEDYHvqwdSvt"
+RAW_SECRET = "JOLbvgAdJqf-sfifvrly4dlAiGruqijFDff844nFYbU"
+
+# Remove any accidental trailing spaces, newlines, or tabs
+T212_API_KEY_ID = RAW_KEY_ID.strip().replace("\n", "").replace("\r", "")
+T212_SECRET_KEY = RAW_SECRET.strip().replace("\n", "").replace("\r", "")
 
 # ==========================================
 # 🧠 SESSION STATE MANAGEMENT
@@ -19,40 +24,33 @@ if "manual_accounts" not in st.session_state:
 
 
 # ==========================================
-# 📡 TRADING 212 CONNECTOR
+# 📡 OFFICIAL TRADING 212 API CONNECTOR
 # ==========================================
 def fetch_trading212_balance():
   url = "https://live.trading212.com/api/v0/equity/account/summary"
 
-  # Attempt 1: Direct Secret Key in Authorization Header (Trading 212 V0 Standard)
+  # Build Official Basic Auth String: Base64("KEY_ID:SECRET")
+  credentials_string = f"{T212_API_KEY_ID}:{T212_SECRET_KEY}"
+  encoded_credentials = base64.b64encode(
+      credentials_string.encode("utf-8")
+  ).decode("utf-8")
+
+  headers = {
+      "Authorization": f"Basic {encoded_credentials}",
+      "User-Agent": "OmniWealth/1.0",
+      "Content-Type": "application/json",
+  }
+
   try:
-    headers = {
-        "Authorization": T212_SECRET_KEY.strip(),
-        "User-Agent": "OmniWealth/1.0",
-    }
     res = requests.get(url, headers=headers, timeout=8)
     if res.status_code == 200:
       data = res.json()
       val = data.get("totalValue", data.get("total", 0.0))
       return float(val), "Connected"
-  except Exception:
-    pass
-
-  # Attempt 2: Direct API Key ID in Authorization Header
-  try:
-    headers = {
-        "Authorization": T212_API_KEY_ID.strip(),
-        "User-Agent": "OmniWealth/1.0",
-    }
-    res = requests.get(url, headers=headers, timeout=8)
-    if res.status_code == 200:
-      data = res.json()
-      val = data.get("totalValue", data.get("total", 0.0))
-      return float(val), "Connected"
-  except Exception:
-    pass
-
-  return 0.0, "HTTP 401: Unauthorized"
+    else:
+      return 0.0, f"HTTP {res.status_code}"
+  except Exception as e:
+    return 0.0, f"Error: {str(e)}"
 
 
 # ==========================================
