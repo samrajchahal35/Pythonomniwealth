@@ -10,11 +10,10 @@ import matplotlib.pyplot as plt
 # 🔑 CREDENTIALS
 # ==========================================
 T212_API_KEY_ID = "44325952ZqvqzThpqXFkTOTzpZNXItUEtoCRx"
-T212_SECRET_KEY = "IK_uSnsJpyQ1JiK2M4BSfuzejEq1Pu3xRItCXFkzqc4"
 
 PLAID_CLIENT_ID = "6ac26ec74b48b1000df508bd"
 PLAID_SECRET = "a9a14167cb418c333b0a0a5ca3102b"
-PLAID_ENV = "development"  # 'sandbox' or 'development'
+PLAID_ENV = "sandbox"  # Use 'sandbox' for testing or 'development' if enabled on Plaid
 
 DB_FILE = "omniwealth.db"
 
@@ -46,23 +45,17 @@ def init_db():
 init_db()
 
 # ==========================================
-# 📡 TRADING 212 API (FIXED BASIC AUTH)
+# 📡 TRADING 212 API
 # ==========================================
 def fetch_trading212_balance():
-    if not T212_API_KEY_ID or not T212_SECRET_KEY:
-        return 0.0, "Credentials missing"
+    if not T212_API_KEY_ID:
+        return 0.0, "Missing API Key"
     
     url = "https://live.trading212.com/api/v0/equity/account/summary"
+    headers = {"Authorization": T212_API_KEY_ID.strip()}
     
     try:
-        # HTTP Basic Authentication using (API_KEY_ID, SECRET_KEY) tuple
-        res = requests.get(
-            url, 
-            auth=(T212_API_KEY_ID.strip(), T212_SECRET_KEY.strip()),
-            headers={"Content-Type": "application/json"},
-            timeout=8
-        )
-
+        res = requests.get(url, headers=headers, timeout=8)
         if res.status_code == 200:
             total = float(res.json().get("total", 0.0))
             return total, "Connected"
@@ -261,7 +254,7 @@ with tab_plaid:
         """
         components.html(plaid_html, height=100)
     else:
-        st.warning("Could not initialize Plaid session. Ensure environment is set to 'development' on Plaid Dashboard.")
+        st.warning("Could not initialize Plaid session. Ensure environment is set correctly.")
 
     st.markdown("---")
     st.write("**Manual Bank Entry (£)**")
